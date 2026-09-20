@@ -1,0 +1,686 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum TenantStatus {
+  TRIAL
+  ACTIVE
+  SUSPENDED
+  CANCELLED
+}
+
+enum PlatformPaymentStatus {
+  PAID
+  PENDING
+  OVERDUE
+}
+
+enum UserRole {
+  ADMIN
+  TEACHER
+  ACCOUNTANT
+  PARENT
+  STUDENT
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  LATE
+  EXCUSED
+}
+
+enum FeeInvoiceStatus {
+  DRAFT
+  ISSUED
+  PARTIAL
+  PAID
+  OVERDUE
+  VOID
+}
+
+enum SchoolFeePaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+enum ExamType {
+  MIDTERM
+  FINAL
+  QUIZ
+  ASSIGNMENT
+  OTHER
+}
+
+enum NotificationChannel {
+  WHATSAPP
+  SMS
+  EMAIL
+  IN_APP
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+enum StaffType {
+  TEACHER
+  ACCOUNTANT
+  ADMIN
+  OTHER
+}
+
+enum DayOfWeek {
+  MONDAY
+  TUESDAY
+  WEDNESDAY
+  THURSDAY
+  FRIDAY
+  SATURDAY
+  SUNDAY
+}
+
+enum PayrollStatus {
+  PENDING
+  PAID
+}
+
+enum SocialPlatform {
+  FACEBOOK
+  INSTAGRAM
+  WHATSAPP
+  YOUTUBE
+  TIKTOK
+  X
+}
+
+enum SocialPostStatus {
+  DRAFT
+  SCHEDULED
+  PUBLISHED
+}
+
+// ---------------------------------------------------------------------------
+// Platform-level (NO schoolId)
+// ---------------------------------------------------------------------------
+
+model Plan {
+  id                String   @id @default(cuid())
+  name              String
+  /// Monthly price in integer paisa (1 PKR = 100). Never float.
+  priceMonthlyPaisa Int
+  maxStudents       Int
+  /// { payroll, certificates, timetable, parentPortal, studentPortal, smsBroadcast, whatsappAlerts, exams }
+  featureFlags      Json
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  tenants       Tenant[]
+  subscriptions PlatformSubscriptionPayment[]
+}
+
+model Tenant {
+  id          String       @id @default(cuid())
+  name        String
+  slug        String       @unique
+  status      TenantStatus @default(TRIAL)
+  planId      String
+  plan        Plan         @relation(fields: [planId], references: [id])
+  trialEndsAt DateTime?
+  /// When true, MONTHLY fee structures issue invoices each month without a manual click.
+  autoInvoiceEnabled Boolean @default(true)
+  /// Calendar day invoices are due (1–28). Default 10th of each month.
+  invoiceDueDay      Int     @default(10)
+  /// Calendar day invoices are created (1–28). Default 1st of each month.
+  invoiceGenerateDay Int     @default(1)
+  /// Storage key for the school logo (tenant-scoped file).
+  logoKey            String?
+  /// Shown in the app header and on certificates, receipts, and report cards.
+  headerText         String?
+  /// Shown in the app footer and on printed documents.
+  footerText         String?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  subscriptions       PlatformSubscriptionPayment[]
+  users               User[]
+  students            Student[]
+  guardians           Guardian[]
+  staff               Staff[]
+  academicYears       AcademicYear[]
+  classes             Class[]
+  sections            Section[]
+  subjects            Subject[]
+  timetables          Timetable[]
+  attendanceRecords   AttendanceRecord[]
+  feeStructures       FeeStructure[]
+  feeInvoices         FeeInvoice[]
+  schoolFeePayments   SchoolFeePayment[]
+  exams               Exam[]
+  examResults         ExamResult[]
+  certificates        Certificate[]
+  announcements       Announcement[]
+  socialPosts         SocialPost[]
+  notificationLogs    NotificationLog[]
+  auditLogs           AuditLog[]
+  payrollPayments     PayrollPayment[]
+}
+
+model SuperAdminUser {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  email     String
+  schoolId  String?
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([email])
+  @@index([expiresAt])
+}
+
+model PlatformSubscriptionPayment {
+  id            String                 @id @default(cuid())
+  tenantId      String
+  tenant        Tenant                 @relation(fields: [tenantId], references: [id])
+  planId        String
+  plan          Plan                   @relation(fields: [planId], references: [id])
+  periodStart   DateTime
+  periodEnd     DateTime
+  /// Integer paisa (PKR * 100)
+  amountPaisa    Int
+  status         PlatformPaymentStatus @default(PENDING)
+  paymentMethod  String?
+  paidAt         DateTime?
+  dueDate        DateTime?
+  reminderSentAt DateTime?
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+
+  @@index([tenantId])
+  @@index([status])
+}
+
+// ---------------------------------------------------------------------------
+// Tenant-scoped (every model has schoolId → Tenant)
+// ---------------------------------------------------------------------------
+
+model User {
+  id           String     @id @default(cuid())
+  schoolId     String
+  school       Tenant     @relation(fields: [schoolId], references: [id])
+  email        String
+  phone        String?
+  passwordHash String
+  role         UserRole
+  status       UserStatus @default(ACTIVE)
+  name         String
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  staff     Staff?
+  student   Student?
+  guardian  Guardian?
+  auditLogs AuditLog[] @relation("AuditActor")
+
+  @@unique([schoolId, email])
+  @@index([schoolId])
+}
+
+model AcademicYear {
+  id        String   @id @default(cuid())
+  schoolId  String
+  school    Tenant   @relation(fields: [schoolId], references: [id])
+  name      String
+  startDate DateTime
+  endDate   DateTime
+  isCurrent Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  classes       Class[]
+  feeStructures FeeStructure[]
+  exams         Exam[]
+  students      Student[]
+
+  @@unique([schoolId, name])
+  @@index([schoolId])
+}
+
+model Class {
+  id             String       @id @default(cuid())
+  schoolId       String
+  school         Tenant       @relation(fields: [schoolId], references: [id])
+  academicYearId String
+  academicYear   AcademicYear @relation(fields: [academicYearId], references: [id])
+  name           String
+  sortOrder      Int          @default(0)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  sections      Section[]
+  subjects      Subject[]
+  students      Student[]
+  feeStructures FeeStructure[]
+  exams         Exam[]
+
+  @@unique([schoolId, academicYearId, name])
+  @@index([schoolId])
+}
+
+model Section {
+  id        String   @id @default(cuid())
+  schoolId  String
+  school    Tenant   @relation(fields: [schoolId], references: [id])
+  classId   String
+  class     Class    @relation(fields: [classId], references: [id])
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  students          Student[]
+  timetables        Timetable[]
+  attendanceRecords AttendanceRecord[]
+
+  @@unique([schoolId, classId, name])
+  @@index([schoolId])
+}
+
+model Subject {
+  id        String   @id @default(cuid())
+  schoolId  String
+  school    Tenant   @relation(fields: [schoolId], references: [id])
+  classId   String?
+  class     Class?   @relation(fields: [classId], references: [id])
+  name      String
+  nameUrdu  String?
+  code      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  timetables  Timetable[]
+  examResults ExamResult[]
+
+  @@index([schoolId])
+}
+
+model Staff {
+  id           String    @id @default(cuid())
+  schoolId     String
+  school       Tenant    @relation(fields: [schoolId], references: [id])
+  userId       String?   @unique
+  user         User?     @relation(fields: [userId], references: [id])
+  employeeCode String
+  name         String
+  nameUrdu     String?
+  phone        String?
+  email        String?
+  type         StaffType
+  designation  String?
+  cnic         String?
+  joiningDate  DateTime?
+  /// Integer paisa (PKR * 100)
+  salaryPaisa  Int?
+  deletedAt    DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  timetables        Timetable[]
+  payrollPayments   PayrollPayment[]
+
+  @@unique([schoolId, employeeCode])
+  @@index([schoolId])
+}
+
+model Guardian {
+  id        String    @id @default(cuid())
+  schoolId  String
+  school    Tenant    @relation(fields: [schoolId], references: [id])
+  userId    String?   @unique
+  user      User?     @relation(fields: [userId], references: [id])
+  name      String
+  nameUrdu  String?
+  relation  String
+  phone     String
+  email     String?
+  cnic      String?
+  address   String?
+  deletedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  students Student[]
+
+  @@index([schoolId])
+}
+
+model Student {
+  id             String     @id @default(cuid())
+  schoolId       String
+  school         Tenant     @relation(fields: [schoolId], references: [id])
+  userId         String?    @unique
+  user           User?      @relation(fields: [userId], references: [id])
+  admissionNo    String
+  name           String
+  nameUrdu       String?
+  gender         Gender
+  dateOfBirth    DateTime?
+  bFormOrCnic    String?
+  photoUrl       String?
+  academicYearId String?
+  academicYear   AcademicYear? @relation(fields: [academicYearId], references: [id])
+  classId        String?
+  class          Class?     @relation(fields: [classId], references: [id])
+  sectionId      String?
+  section        Section?   @relation(fields: [sectionId], references: [id])
+  guardianId     String?
+  guardian       Guardian?  @relation(fields: [guardianId], references: [id])
+  admissionDate  DateTime   @default(now())
+  status         UserStatus @default(ACTIVE)
+  deletedAt      DateTime?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  attendanceRecords AttendanceRecord[]
+  feeInvoices       FeeInvoice[]
+  examResults       ExamResult[]
+  certificates      Certificate[]
+
+  @@unique([schoolId, admissionNo])
+  @@index([schoolId])
+  @@index([schoolId, classId, sectionId])
+}
+
+model Timetable {
+  id        String    @id @default(cuid())
+  schoolId  String
+  school    Tenant    @relation(fields: [schoolId], references: [id])
+  sectionId String
+  section   Section   @relation(fields: [sectionId], references: [id])
+  subjectId String
+  subject   Subject   @relation(fields: [subjectId], references: [id])
+  staffId   String?
+  staff     Staff?    @relation(fields: [staffId], references: [id])
+  dayOfWeek DayOfWeek
+  startTime String
+  endTime   String
+  room      String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([schoolId])
+  @@index([schoolId, sectionId, dayOfWeek])
+  @@unique([schoolId, sectionId, dayOfWeek, startTime])
+}
+
+model PayrollPayment {
+  id          String         @id @default(cuid())
+  schoolId    String
+  school      Tenant         @relation(fields: [schoolId], references: [id])
+  staffId     String
+  staff       Staff          @relation(fields: [staffId], references: [id])
+  periodLabel String
+  /// Integer paisa (PKR * 100)
+  amountPaisa Int
+  status      PayrollStatus  @default(PENDING)
+  method      String?
+  paidAt      DateTime?
+  notes       String?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@unique([schoolId, staffId, periodLabel])
+  @@index([schoolId])
+}
+
+model AttendanceRecord {
+  id            String           @id @default(cuid())
+  schoolId      String
+  school        Tenant           @relation(fields: [schoolId], references: [id])
+  studentId     String
+  student       Student          @relation(fields: [studentId], references: [id])
+  sectionId     String
+  section       Section          @relation(fields: [sectionId], references: [id])
+  date          DateTime         @db.Date
+  status        AttendanceStatus
+  remarks       String?
+  markedById    String?
+  correctedById String?
+  correctedAt   DateTime?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  @@unique([schoolId, studentId, date])
+  @@index([schoolId])
+  @@index([schoolId, sectionId, date])
+}
+
+model FeeStructure {
+  id             String       @id @default(cuid())
+  schoolId       String
+  school         Tenant       @relation(fields: [schoolId], references: [id])
+  academicYearId String
+  academicYear   AcademicYear @relation(fields: [academicYearId], references: [id])
+  classId        String?
+  class          Class?       @relation(fields: [classId], references: [id])
+  name           String
+  /// Integer paisa (PKR * 100)
+  amountPaisa    Int
+  frequency      String
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  invoices FeeInvoice[]
+
+  @@index([schoolId])
+}
+
+model FeeInvoice {
+  id             String           @id @default(cuid())
+  schoolId       String
+  school         Tenant           @relation(fields: [schoolId], references: [id])
+  studentId      String
+  student        Student          @relation(fields: [studentId], references: [id])
+  feeStructureId String?
+  feeStructure   FeeStructure?    @relation(fields: [feeStructureId], references: [id])
+  invoiceNo      String
+  periodLabel    String?
+  /// Integer paisa (PKR * 100)
+  amountPaisa    Int
+  paidPaisa      Int              @default(0)
+  dueDate        DateTime
+  status         FeeInvoiceStatus @default(ISSUED)
+  issuedById     String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  payments SchoolFeePayment[]
+
+  @@unique([schoolId, invoiceNo])
+  @@index([schoolId])
+  @@index([schoolId, status])
+}
+
+model SchoolFeePayment {
+  id           String                 @id @default(cuid())
+  schoolId     String
+  school       Tenant                 @relation(fields: [schoolId], references: [id])
+  invoiceId    String
+  invoice      FeeInvoice             @relation(fields: [invoiceId], references: [id])
+  /// Integer paisa (PKR * 100)
+  amountPaisa  Int
+  status       SchoolFeePaymentStatus @default(PENDING)
+  method       String
+  providerRef  String?
+  receiptNo    String?
+  paidAt       DateTime?
+  recordedById String?
+  createdAt    DateTime               @default(now())
+  updatedAt    DateTime               @updatedAt
+
+  @@index([schoolId])
+}
+
+model Exam {
+  id             String       @id @default(cuid())
+  schoolId       String
+  school         Tenant       @relation(fields: [schoolId], references: [id])
+  academicYearId String
+  academicYear   AcademicYear @relation(fields: [academicYearId], references: [id])
+  classId        String?
+  class          Class?       @relation(fields: [classId], references: [id])
+  name           String
+  type           ExamType
+  startDate      DateTime?
+  endDate        DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  results ExamResult[]
+
+  @@index([schoolId])
+}
+
+model ExamResult {
+  id            String   @id @default(cuid())
+  schoolId      String
+  school        Tenant   @relation(fields: [schoolId], references: [id])
+  examId        String
+  exam          Exam     @relation(fields: [examId], references: [id])
+  studentId     String
+  student       Student  @relation(fields: [studentId], references: [id])
+  subjectId     String
+  subject       Subject  @relation(fields: [subjectId], references: [id])
+  marksObtained Decimal  @db.Decimal(6, 2)
+  marksTotal    Decimal  @db.Decimal(6, 2)
+  grade         String?
+  remarks       String?
+  enteredById   String?
+  correctedById String?
+  correctedAt   DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([schoolId, examId, studentId, subjectId])
+  @@index([schoolId])
+}
+
+model Certificate {
+  id        String   @id @default(cuid())
+  schoolId  String
+  school    Tenant   @relation(fields: [schoolId], references: [id])
+  studentId String
+  student   Student  @relation(fields: [studentId], references: [id])
+  type      String
+  issuedAt  DateTime @default(now())
+  fileUrl   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([schoolId])
+}
+
+model Announcement {
+  id          String    @id @default(cuid())
+  schoolId    String
+  school      Tenant    @relation(fields: [schoolId], references: [id])
+  title       String
+  body        String
+  audience    String
+  publishedAt DateTime?
+  createdById String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([schoolId])
+}
+
+model SocialPost {
+  id          String          @id @default(cuid())
+  schoolId    String
+  school      Tenant          @relation(fields: [schoolId], references: [id])
+  title       String
+  caption     String
+  captionUrdu String?
+  hashtags    String?
+  linkUrl     String?
+  platforms   SocialPlatform[]
+  status      SocialPostStatus @default(DRAFT)
+  scheduledAt DateTime?
+  publishedAt DateTime?
+  imageKeys   String[]
+  createdById String?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  @@index([schoolId])
+  @@index([schoolId, status])
+}
+
+model NotificationLog {
+  id         String              @id @default(cuid())
+  schoolId   String
+  school     Tenant              @relation(fields: [schoolId], references: [id])
+  channel    NotificationChannel
+  to         String
+  body       String
+  status     NotificationStatus  @default(PENDING)
+  provider   String?
+  providerId String?
+  error      String?
+  sentAt     DateTime?
+  createdAt  DateTime            @default(now())
+
+  @@index([schoolId])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  schoolId  String
+  school    Tenant   @relation(fields: [schoolId], references: [id])
+  actorId   String?
+  actor     User?    @relation("AuditActor", fields: [actorId], references: [id])
+  action    String
+  entity    String
+  entityId  String
+  before    Json?
+  after     Json?
+  createdAt DateTime @default(now())
+
+  @@index([schoolId])
+  @@index([schoolId, entity, entityId])
+}

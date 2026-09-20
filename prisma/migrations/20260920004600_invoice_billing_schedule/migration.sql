@@ -1,0 +1,4 @@
+-- AlterTable
+ALTER TABLE "Tenant" ADD COLUMN "autoInvoiceEnabled" BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE "Tenant" ADD COLUMN "invoiceDueDay" INTEGER NOT NULL DEFAULT 10;
+ALTER TABLE "Tenant" ADD COLUMN "invoiceGenerateDay" INTEGER NOT NULL DEFAULT 1;
